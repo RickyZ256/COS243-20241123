@@ -2,6 +2,7 @@ from llama_index import SimpleDirectoryReader, Document
 import os
 from EbookLib import epub
 from pdfminer.high_level import extract_text
+from Embedding_Generation import EmbeddingGenerator, VectorIndex
 
 def load_ebooks(directory_path):
     documents = []
@@ -60,9 +61,27 @@ def chunk_documents(documents, chunk_size=500):
     
     return chunked_documents
 
+
 if __name__ == "__main__":
-    directory_path = "./ebooks"  # Replace with the path to your eBook collection
+    # Load and process documents
+    directory_path = "./ebooks"
     documents = load_ebooks(directory_path)
     chunked_documents = chunk_documents(documents)
-    
+
     print(f"Processed {len(documents)} documents into {len(chunked_documents)} chunks.")
+
+    # Generate embeddings
+    chunked_texts = [doc.text for doc in chunked_documents]
+    chunked_metadata = [doc.metadata for doc in chunked_documents]
+
+    embedding_generator = EmbeddingGenerator()
+    embeddings = embedding_generator.generate_embeddings(chunked_texts)
+
+    # Build vector index
+    vector_index = VectorIndex()
+    vector_index.add_to_index(embeddings, chunked_metadata)
+    vector_index.build_index()
+
+    # Save the index
+    vector_index.save_index("vector_index.pkl")
+    print("Embedding and index generation complete.")
