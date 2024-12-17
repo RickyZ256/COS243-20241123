@@ -1,17 +1,19 @@
-from llama_index import SimpleDirectoryReader, Document
 import os
+import gradio as gr
+from llama_index.core import SimpleDirectoryReader, Document
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.llms.ollama import Ollama
+from Embedding_Generation import EmbeddingGenerator, VectorIndex
 from EbookLib import epub
 from pdfminer.high_level import extract_text
-from Embedding_Generation import EmbeddingGenerator, VectorIndex
+
 
 def load_ebooks(directory_path):
     documents = []
     
-    # Iterate through files in the directory
     for file_name in os.listdir(directory_path):
         file_path = os.path.join(directory_path, file_name)
-        
-        # Process EPUB files
+
         if file_name.endswith('.epub'):
             try:
                 print(f"Processing EPUB: {file_name}")
@@ -20,68 +22,63 @@ def load_ebooks(directory_path):
             except Exception as e:
                 print(f"Error processing EPUB {file_name}: {e}")
         
-        # Process PDF files
+
         elif file_name.endswith('.pdf'):
             try:
                 print(f"Processing PDF: {file_name}")
-                text = extract_text_from_pdf(file_path)
+                text = extract_text(file_path)
                 documents.append(Document(text=text, metadata={"file_name": file_name}))
             except Exception as e:
                 print(f"Error processing PDF {file_name}: {e}")
-        
-        # Skip unsupported files
-        else:
-            print(f"Skipping unsupported file: {file_name}")
     
     return documents
 
 def extract_text_from_epub(file_path):
     book = epub.read_epub(file_path)
-    text = []
-    
-    for item in book.items:
-        if item.get_type() == epub.EpubHtml:
-            text.append(item.get_content().decode('utf-8'))
-    
-    return "\n".join(text)
+    text = ""
+    for item in book.get_items():
+        if item.get_type() == ebooklib.ITEM_DOCUMENT:
+            text += item.get_body_content().decode('utf-8')
+    return text
 
-def extract_text_from_pdf(file_path):
-    return extract_text(file_path)
-
-def chunk_documents(documents, chunk_size=500):
-    chunked_documents = []
-    
-    for doc in documents:
-        words = doc.text.split()
-        for i in range(0, len(words), chunk_size):
-            chunk_text = " ".join(words[i:i+chunk_size])
-            chunk_metadata = doc.metadata.copy()
-            chunk_metadata["chunk_id"] = i // chunk_size
-            chunked_documents.append(Document(text=chunk_text, metadata=chunk_metadata))
-    
-    return chunked_documents
-
-
-if __name__ == "__main__":
-    # Load and process documents
-    directory_path = "./ebooks"
+def load_and_embed_documents(directory_path):
     documents = load_ebooks(directory_path)
-    chunked_documents = chunk_documents(documents)
+    texts = [doc.text for doc in documents]
+    
+    embedding_generator = EmbeddingGenerator()
+    embeddings = embedding_generator.generate_embeddings(texts)
 
-    print(f"Processed {len(documents)} documents into {len(chunked_documents)} chunks.")
+    vector_index = VectorIndex()
+    vector_index.add_to_index(embeddings, [doc.metadata for doc in documents])
+    vector_index.build_index()
+    
+    return vector_index, documents
 
-    # Generate embeddings
-    chunked_texts = [doc.text for doc in chunked_documents]
-    chunked_metadata = [doc.metadata for doc in chunked_documents]
+def search_books(query, vector_index, documents):
 
     embedding_generator = EmbeddingGenerator()
-    embeddings = embedding_generator.generate_embeddings(chunked_texts)
+    query_embedding = embedding_generator.generate_embeddings([query])[0]
+    
 
-    # Build vector index
-    vector_index = VectorIndex()
-    vector_index.add_to_index(embeddings, chunked_metadata)
-    vector_index.build_index()
+    results = vector_index.search(query_embedding)
+    
 
-    # Save the index
-    vector_index.save_index("vector_index.pkl")
-    print("Embedding and index generation complete.")
+    search_results = []
+    for result in results:
+        doc_metadata = documents[result['index']].metadata
+        search_results.append(f"File: {doc_metadata['file_name']} - Score: {result['score']:.4f}")
+    
+    return "\n".join(search_results)
+
+def run_gradio_interface(directory_path):
+    vector_index, documents = load_and_embed_documents(directory_path)
+    
+    gr.Interface(
+        fn=lambda query: search_books(query, vector_index, documents),
+        inputs=gr.Textbox(label="Enter your search query"),
+        outputs=gr.Textbox(label="Search Results", lines=10),
+        title="Local AI Librarian: Intelligent Book Search",
+        description="Search for books by querying the content of EPUB and PDF files."
+    ).launch()
+
+run_gradio_interface("/path/to/your/ebook/directory")
